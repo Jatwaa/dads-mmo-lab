@@ -6,6 +6,51 @@
 
 ---
 
+## 🖥️ Windows Launcher *(New)*
+
+A full GUI launcher for Windows is now included — no terminal, no bash, no Linux knowledge required.
+
+**First time setup — run once:**
+```
+Windows-DadsMMoLab\setup.bat
+```
+Installs Python dependencies into a local virtual environment. Internet required for this step only.
+
+**Every time you want to play — run this:**
+```
+Windows-DadsMMoLab\launch.bat
+```
+Opens the launcher GUI. From here you can start/stop the server, choose your bot type, configure settings, and launch WoW — all with one click.
+
+**Optional — build a standalone `.exe`:**
+```
+Windows-DadsMMoLab\build_exe.bat
+```
+Packages the launcher into a single `dist\DadsMmoLab.exe` you can pin to your taskbar or desktop. No Python installation required to run the output.
+
+> **Quick flow:** `setup.bat` once → `launch.bat` every session → click **Start** → wait for *AZEROTH IS READY!* → click **Launch WoW** → play → close WoW → server shuts down automatically.
+
+---
+
+## 🔄 Recent Updates
+
+### Windows Launcher
+- ✅ Full GUI launcher added (`Windows-DadsMMoLab/`) — Start/Stop server, pick bot flavour, configure WoW path, live log viewer
+- ✅ Prerequisite checker on first launch — guides you through Docker Desktop and Python setup
+
+### Playerbots (liyunfan1223 fork) — Fixed
+- ✅ **mod-playerbots now actually compiled** — the bot module lives in a separate git repo and must be cloned before cmake; without this, all bot code was silently compiled out even though the server showed `(Playerbot branch)` in its title. Fixed by explicitly cloning `liyunfan1223/mod-playerbots` into `modules/` before the build step.
+- ✅ **AiPlayerbot settings now correctly applied** — all `AiPlayerbot.*` config keys live in `playerbots.conf`, not `worldserver.conf`. The entrypoint now patches the right file, so bot counts, faction ratios, and trading behaviour actually take effect.
+- ✅ **Auction House bot properly wired** — replaced invented `AhBotEnabled/Buyer/Seller` env vars (which mapped to nothing) with the real key `AiPlayerbot.EnableRandomBotTrading = 1`.
+- ✅ **Default bot count raised to 500** — tuned for modern gaming hardware (Ryzen 7 5800X class). Override with `PLAYERBOT_TOTAL_COUNT` in a `.env` file next to the compose file.
+- ✅ **DBC table fixes for the liyunfan1223 fork** — the fork references `charsections_dbc` and `emotetextsound_dbc` tables that the standard db-import image doesn't create; the entrypoint now creates them automatically on first start.
+- ✅ **MySQLExecutable crash fixed** — the DBUpdater called `std::filesystem::absolute("")` on an empty path and crashed immediately after DB pools opened. Now resolved by installing `mysql-client` in the runtime image and setting the path in config.
+
+### Launcher
+- ✅ **"Waiting for World Server" no longer gets stuck** — removed a `--tail 80` log limit that caused the `ready...` sentinel to be missed when 500+ bots log in simultaneously, pushing the line hundreds of positions back.
+
+---
+
 ## 🎯 What Is This?
 
 This is a collection of **step-by-step guides, Docker scripts, and automated installers** for running classic MMO private servers **completely offline** on a Steam Deck (or any Linux machine).
@@ -94,7 +139,21 @@ Turns out — for a lot of classic MMOs — you can. The emulator community has 
 
 ## 📦 What's In This Repo
 
-### WoW Guides (`guides/wow-wotlk/`)
+### 🖥️ Windows Launcher (`Windows-DadsMMoLab/`)
+
+| File | When to run |
+|------|-------------|
+| `setup.bat` | **Once** — installs Python deps into local venv |
+| `launch.bat` | **Every session** — opens the GUI launcher |
+| `build_exe.bat` | Optional — compiles a standalone `.exe` |
+| `launcher/` | Python source for the GUI (CustomTkinter) |
+| `server/docker-compose.yml` | Base WoW — standard AzerothCore |
+| `server/docker-compose-playerbots.yml` | Playerbots — AI bots that roam, quest, and use the AH |
+| `server/docker-compose-npcbots.yml` | NPCBots — hireable NPC companions |
+| `server/Dockerfile.playerbots` | Builds the Playerbots worldserver from source |
+| `server/entrypoint-playerbots.sh` | Container entrypoint — patches config, creates DB tables, starts server |
+
+### 🐧 Linux / Steam Deck (`guides/wow-wotlk/`)
 
 | File | What it does |
 |------|-------------|
@@ -217,6 +276,8 @@ This project:
 
 Huge credit to the communities that make this possible:
 - **[AzerothCore](https://github.com/azerothcore/azerothcore-wotlk)** — the incredible open source WoW emulator
+- **[liyunfan1223](https://github.com/liyunfan1223/azerothcore-wotlk)** — the Playerbots fork (core server)
+- **[liyunfan1223/mod-playerbots](https://github.com/liyunfan1223/mod-playerbots)** — the Playerbots module
 - **[trickerer](https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots)** — the NPCBots fork
 - Every emulator project linked in our guides
 
