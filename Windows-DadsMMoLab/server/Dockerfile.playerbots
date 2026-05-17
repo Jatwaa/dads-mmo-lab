@@ -1,0 +1,134 @@
+# Dad's MMO Lab — Playerbots image
+# Builds AzerothCore with mod-playerbots from liyunfan1223's fork.
+#
+# ⚠  First build takes 20–40 minutes — Docker compiles the whole server.
+#    Subsequent starts use the cached image and are instant.
+#
+# Build is triggered automatically by:
+#   docker compose build          (manual)
+#   Dad's MMO Lab launcher Setup  (automatic for Playerbots server type)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1 — Compile
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:22.04 AS builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG NPROC=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake make clang-14 libssl-dev libbz2-dev libreadline-dev \
+    libncurses-dev default-libmysqlclient-dev libboost-all-dev \
+    ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone liyunfan1223/azerothcore-wotlk (core server framework)
+RUN git clone --depth=1 \
+    https://github.com/liyunfan1223/azerothcore-wotlk.git /acore
+
+# Clone mod-playerbots into the modules directory.
+# The modules/CMakeLists.txt detects this directory and sets -DMOD_PLAYERBOTS,
+# enabling the playerbots code paths throughout the server source.
+# Without this step the server compiles without any bot functionality.
+RUN git clone --depth=1 \
+    https://github.com/liyunfan1223/mod-playerbots.git \
+    /acore/modules/mod-playerbots
+
+WORKDIR /acore
+
+# Configure — build worldserver + authserver + db-import tool only.
+# Install prefix MUST match the runtime path (/azerothcore/env/dist) because
+# the compiled binary has this path baked in for config/data lookups.
+RUN cmake -B /acore/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/azerothcore/env/dist \
+    -DCMAKE_C_COMPILER=clang-14 \
+    -DCMAKE_CXX_COMPILER=clang++-14 \
+    -DWITH_WARNINGS=0 \
+    -DTOOLS_BUILD=none \
+    -DSCRIPTS=static \
+    -DMODULES=static \
+    && cmake --build /acore/build \
+             --target install \
+             --parallel $([ "$NPROC" = "0" ] && nproc || echo "$NPROC")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2 — Runtime
+# Uses the same base OS as the official AzerothCore images so library
+# versions match the entrypoint scripts.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:22.04 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install every Boost 1.74 runtime library AzerothCore can link against,
+# plus all other runtime deps.  Installing the full set here avoids any
+# future "cannot open shared object file" surprises without needing dev pkgs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # TLS / crypto
+    libssl3 \
+    # MySQL client runtime + CLI (worldserver DBUpdater calls absolute(MySQLExecutable))
+    default-libmysqlclient-dev \
+    default-mysql-client \
+    # Terminal libs
+    libncurses6 libreadline8 \
+    # Compression (used by Boost.Iostreams and AzerothCore itself)
+    libbz2-1.0 zlib1g \
+    # Boost 1.74 — full runtime set (all libraries the server may link against)
+    libboost-atomic1.74.0 \
+    libboost-chrono1.74.0 \
+    libboost-context1.74.0 \
+    libboost-contract1.74.0 \
+    libboost-coroutine1.74.0 \
+    libboost-date-time1.74.0 \
+    libboost-filesystem1.74.0 \
+    libboost-graph1.74.0 \
+    libboost-iostreams1.74.0 \
+    libboost-locale1.74.0 \
+    libboost-log1.74.0 \
+    libboost-math1.74.0 \
+    libboost-nowide1.74.0 \
+    libboost-program-options1.74.0 \
+    libboost-random1.74.0 \
+    libboost-regex1.74.0 \
+    libboost-serialization1.74.0 \
+    libboost-stacktrace1.74.0 \
+    libboost-system1.74.0 \
+    libboost-thread1.74.0 \
+    libboost-timer1.74.0 \
+    libboost-type-erasure1.74.0 \
+    libboost-wave1.74.0 \
+    # Process supervisor + shell
+    tini bash \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built artifacts — path matches the install prefix above
+COPY --from=builder /azerothcore/env/dist /azerothcore/env/dist
+
+# Copy docker entrypoint helpers from the source tree
+COPY --from=builder /acore/apps/docker /azerothcore/apps/docker
+
+# Copy SQL update files so the DBUpdater can apply incremental DB updates on
+# startup.  The worldserver binary has /acore baked in as its cmake SourceDirectory
+# and checks that path exists before running the updater.
+COPY --from=builder /acore/data/sql /acore/data/sql
+
+# Copy mod-playerbots SQL so the module can auto-populate acore_playerbots on
+# first start.  The module checks /acore/modules/mod-playerbots/data/sql/playerbots/base/
+# and applies the full playerbots schema when the database is empty.
+COPY --from=builder /acore/modules/mod-playerbots/data/sql /acore/modules/mod-playerbots/data/sql
+
+# Ensure the worldserver is executable
+RUN chmod +x /azerothcore/env/dist/bin/worldserver \
+    && { chmod +x /azerothcore/env/dist/bin/authserver 2>/dev/null || true; } \
+    && { chmod +x /azerothcore/env/dist/bin/dbimport   2>/dev/null || true; }
+
+WORKDIR /azerothcore/env/dist/bin
+
+# Copy the entrypoint script (written as a real file to avoid quoting issues
+# with printf/heredoc when embedding sed commands inside RUN instructions).
+COPY entrypoint-playerbots.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]

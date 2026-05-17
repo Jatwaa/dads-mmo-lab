@@ -1,0 +1,138 @@
+# Dad's MMO Lab — World of Warcraft Offline Server
+# AzerothCore — Windows 11 edition
+# https://github.com/DadsMmoLab/dads-mmo-lab
+#
+# USAGE:
+#   Start:   docker compose up -d
+#   Stop:    docker compose down
+#   Logs:    docker logs -f ac_worldserver
+#   Console: docker attach ac_worldserver
+#            (detach with Ctrl+P then Ctrl+Q)
+
+services:
+
+  # ─────────────────────────────────────────
+  # DATABASE
+  # Stores all game data, characters, accounts
+  # ─────────────────────────────────────────
+  ac-database:
+    image: mysql:8.4
+    container_name: ac_database
+    environment:
+      MYSQL_ROOT_PASSWORD: azeroth
+      MYSQL_DATABASE: acore_world
+    volumes:
+      - ac-database:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pazeroth"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ─────────────────────────────────────────
+  # CLIENT DATA
+  # Pre-extracted maps, vmaps, mmaps, dbc.
+  # Runs once to populate the client-data
+  # volume then exits — no restart needed.
+  # NOTE: First pull is ~12 GB. Be patient.
+  # ─────────────────────────────────────────
+  ac-client-data:
+    image: acore/ac-wotlk-client-data:master
+    container_name: ac_client_data
+    volumes:
+      - client-data:/azerothcore/env/dist/data
+
+  # ─────────────────────────────────────────
+  # DATABASE IMPORT
+  # Runs once on first launch to populate all
+  # game databases — exits when done
+  # ─────────────────────────────────────────
+  ac-db-import:
+    image: acore/ac-wotlk-db-import:master
+    container_name: ac_db_import
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    networks:
+      - ac-network
+    restart: on-failure
+
+  # ─────────────────────────────────────────
+  # AUTH SERVER
+  # Handles login / account authentication
+  # ─────────────────────────────────────────
+  ac-authserver:
+    image: acore/ac-wotlk-authserver:master
+    container_name: ac_authserver
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    ports:
+      - "3724:3724"
+    restart: unless-stopped
+    networks:
+      - ac-network
+
+  # ─────────────────────────────────────────
+  # WORLD SERVER
+  # The actual game world — quests, NPCs, etc.
+  # ─────────────────────────────────────────
+  ac-worldserver:
+    image: acore/ac-wotlk-worldserver:master
+    container_name: ac_worldserver
+    environment:
+      AC_DATA_DIR: "/azerothcore/env/dist/data"
+      AC_LOGS_DIR: "/azerothcore/env/dist/logs"
+      AC_CONFIG_DIR: "/azerothcore/env/dist/etc"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+      # Silence ALE (Lua engine) warnings — module not used in base install
+      AC_ALE_ENABLED: "0"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    volumes:
+      - client-data:/azerothcore/env/dist/data:ro
+      - ./logs:/azerothcore/env/dist/logs
+    ports:
+      - "8085:8085"
+      - "7878:7878"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    stdin_open: true
+    tty: true
+    # Windows PC resource limits — raise if you have more RAM available
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
+
+# ─────────────────────────────────────────
+# VOLUMES & NETWORKS
+# ─────────────────────────────────────────
+volumes:
+  ac-database:
+    name: dads_mmo_wow_db
+  client-data:
+    name: dads_mmo_client_data
+
+networks:
+  ac-network:
+    name: dads_mmo_network
+    driver: bridge

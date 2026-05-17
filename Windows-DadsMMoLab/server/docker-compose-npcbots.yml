@@ -1,0 +1,163 @@
+# Dad's MMO Lab — AzerothCore with NPCBots
+# https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots
+#
+# NPCBots are fully server-side NPC companions and world wanderers.
+# They require NO running WoW client — bots live entirely on the server.
+#
+# World wandering bots fight in zones, follow faction logic, and can be
+# configured for class/faction distribution via the env vars below.
+#
+# In-game GM commands (after server starts):
+#   .npcbot lookup <class>     — find a bot for hire
+#   .npcbot add <entry>        — hire a bot companion
+#   .npcbot remove             — dismiss a bot
+#   .npcbot info               — show your bots
+#   Wandering bots spawn automatically — no commands needed.
+#
+# IMAGE NOTE:
+#   The worldserver image below is from the trickerer NPCBots fork.
+#   If the pull fails, check the latest tag at:
+#   https://github.com/trickerer/AzerothCore-wotlk-with-NPCBots/releases
+#   and update the image tag in this file.
+
+services:
+
+  # ─────────────────────────────────────────
+  # DATABASE
+  # ─────────────────────────────────────────
+  ac-database:
+    image: mysql:8.4
+    container_name: ac_database
+    environment:
+      MYSQL_ROOT_PASSWORD: azeroth
+      MYSQL_DATABASE: acore_world
+    volumes:
+      - ac-database:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pazeroth"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ─────────────────────────────────────────
+  # CLIENT DATA (same as base — maps/vmaps)
+  # ─────────────────────────────────────────
+  ac-client-data:
+    image: acore/ac-wotlk-client-data:master
+    container_name: ac_client_data
+    volumes:
+      - client-data:/azerothcore/env/dist/data
+
+  # ─────────────────────────────────────────
+  # DATABASE IMPORT (NPCBots fork adds extra
+  # SQL tables for the bot system)
+  # ─────────────────────────────────────────
+  ac-db-import:
+    image: ghcr.io/trickerer/azerothcore-wotlk-with-npcbots:master
+    container_name: ac_db_import
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+    command: ["./acore-db-import"]
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    networks:
+      - ac-network
+    restart: on-failure
+
+  # ─────────────────────────────────────────
+  # AUTH SERVER
+  # ─────────────────────────────────────────
+  ac-authserver:
+    image: acore/ac-wotlk-authserver:master
+    container_name: ac_authserver
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    ports:
+      - "3724:3724"
+    restart: unless-stopped
+    networks:
+      - ac-network
+
+  # ─────────────────────────────────────────
+  # WORLD SERVER — NPCBots fork
+  # Wandering bots populate all major zones.
+  # Adjust bot counts with the env vars below.
+  # ─────────────────────────────────────────
+  ac-worldserver:
+    image: ghcr.io/trickerer/azerothcore-wotlk-with-npcbots:master
+    container_name: ac_worldserver
+    environment:
+      AC_DATA_DIR: "/azerothcore/env/dist/data"
+      AC_LOGS_DIR: "/azerothcore/env/dist/logs"
+      AC_CONFIG_DIR: "/azerothcore/env/dist/etc"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+
+      # ── NPCBot Core ───────────────────────────────────────────────────────
+      AC_NPC_BOT_ENABLE: "1"
+      AC_NPC_BOT_ALLOW_PLAYER_CONTROL_BOTS: "1"
+
+      # ── Wandering World Bots ─────────────────────────────────────────────
+      # Bots that roam zones, fight mobs, and engage players
+      AC_NPC_BOT_WANDERING_BOTS_ENABLE: "1"
+      # Total wandering bots in the world (set by launcher bot config)
+      AC_NPC_BOT_WANDERING_BOTS_MIN_SPAWN: "${NPCBOT_WORLD_COUNT:-40}"
+      # 0–1000: 0=all alliance, 500=equal, 1000=all horde
+      AC_NPC_BOT_WANDERING_BOTS_FACTION_CHANCE: "${NPCBOT_FACTION_CHANCE:-500}"
+      # Bot max level (80 = max WotLK)
+      AC_NPC_BOT_AUTOSPAWN_BOT_LEVEL: "80"
+      # Allow bots to equip gear they find
+      AC_NPC_BOT_ALLOW_EQUIP_GEAR: "1"
+      # Bots respawn after death
+      AC_NPC_BOT_REVIVE_TIMER: "60"
+
+      # ── Eluna (Lua Engine for bot_world.lua mod) ──────────────────────────
+      AC_ALE_ENABLED: "1"
+      # Mount point is outside the read-only client-data volume
+      AC_ELUNA_LUASCRIPTDIR: "/azerothcore/luascripts"
+
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    volumes:
+      - client-data:/azerothcore/env/dist/data:ro
+      - ./logs:/azerothcore/env/dist/logs
+      - ./eluna:/azerothcore/luascripts
+    ports:
+      - "8085:8085"
+      - "7878:7878"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
+
+volumes:
+  ac-database:
+    name: dads_mmo_npcbots_db
+  client-data:
+    name: dads_mmo_client_data
+
+networks:
+  ac-network:
+    name: dads_mmo_network
+    driver: bridge

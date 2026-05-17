@@ -1,0 +1,12 @@
+# Default: auto line ending normalization
+* text=auto
+
+# Shell scripts must stay LF — Docker runs these inside Linux containers
+*.sh text eol=lf
+
+# Docker files must stay LF
+Dockerfile* text eol=lf
+entrypoint*.sh text eol=lf
+
+# Windows batch files stay CRLF
+*.bat text eol=crlf

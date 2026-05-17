@@ -1,0 +1,42 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env
+
+# Build artifacts
+dist/
+build/
+*.spec
+*.egg-info/
+
+# ── Server runtime files ──────────────────────────────────────────────────────
+# Log files (keep the directory, not the content)
+Windows-DadsMMoLab/server/logs/*.log
+Windows-DadsMMoLab/server/logs/*.conf.debug
+
+# Docker .env overrides (contain local bot counts etc — user creates their own)
+Windows-DadsMMoLab/server/.env
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# JetBrains / VSCode
+.idea/
+.vscode/
+*.iml
+
+# ── Claude internal ───────────────────────────────────────────────────────────
+.claude/

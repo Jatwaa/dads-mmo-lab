@@ -1,0 +1,188 @@
+# Dad's MMO Lab — AzerothCore with mod-playerbots
+# https://github.com/liyunfan1223/azerothcore-wotlk
+#
+# mod-playerbots creates fully simulated player-bots that log in to the
+# world server just like real players.  They can quest, group, PvP, and
+# post/bid on the Auction House — all without any running WoW clients.
+#
+# In-game GM commands (after server starts):
+#   .bot add <name>           — spawn a playerbot companion
+#   .bot info <name>          — show bot status
+#   .bot remove <name>        — dismiss bot
+#   .ahbot info               — show AH bot status
+#   Random bots spawn and trade automatically when AH bot is enabled.
+#
+# BUILD NOTE:
+#   The worldserver is built locally from the liyunfan1223/azerothcore-wotlk
+#   source (no pre-built public image exists).  The launcher Setup step runs
+#   docker compose build  automatically.
+#   ⚠  First build: 20–40 min.  Subsequent starts use the Docker cache.
+#
+#   Database import uses the standard acore/ac-wotlk-db-import:master image
+#   (same as Base WoW).  The playerbots worldserver applies its extra SQL
+#   tables automatically on first startup via the module updater.
+
+services:
+
+  # ─────────────────────────────────────────
+  # DATABASE
+  # ─────────────────────────────────────────
+  ac-database:
+    image: mysql:8.4
+    container_name: ac_database
+    environment:
+      MYSQL_ROOT_PASSWORD: azeroth
+      MYSQL_DATABASE: acore_world
+    volumes:
+      - ac-database:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pazeroth"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ─────────────────────────────────────────
+  # CLIENT DATA (same game data as base)
+  # ─────────────────────────────────────────
+  ac-client-data:
+    image: acore/ac-wotlk-client-data:master
+    container_name: ac_client_data
+    volumes:
+      - client-data:/azerothcore/env/dist/data
+
+  # ─────────────────────────────────────────
+  # DATABASE IMPORT
+  # Uses the standard AzerothCore import image
+  # to seed acore_auth / acore_world / acore_characters
+  # with full base game data (same as Base WoW).
+  #
+  # The playerbots worldserver then applies its
+  # own additional SQL tables via the built-in
+  # module updater on first startup — this is
+  # the standard AzerothCore module pattern.
+  # ─────────────────────────────────────────
+  ac-db-import:
+    image: acore/ac-wotlk-db-import:master
+    container_name: ac_db_import
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    networks:
+      - ac-network
+    restart: on-failure
+
+  # ─────────────────────────────────────────
+  # AUTH SERVER
+  # ─────────────────────────────────────────
+  ac-authserver:
+    image: acore/ac-wotlk-authserver:master
+    container_name: ac_authserver
+    environment:
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+    depends_on:
+      ac-database:
+        condition: service_healthy
+    ports:
+      - "3724:3724"
+    restart: unless-stopped
+    networks:
+      - ac-network
+
+  # ─────────────────────────────────────────
+  # WORLD SERVER — Playerbots fork
+  # Bots log in as simulated players, roam
+  # the world, quest, and use the AH.
+  # Built locally from Dockerfile.playerbots.
+  # ─────────────────────────────────────────
+  ac-worldserver:
+    build:
+      context: .
+      dockerfile: Dockerfile.playerbots
+    image: dads-mmo-playerbots:local
+    container_name: ac_worldserver
+    environment:
+      AC_DATA_DIR: "/azerothcore/env/dist/data"
+      AC_LOGS_DIR: "/azerothcore/env/dist/logs"
+      AC_CONFIG_DIR: "/azerothcore/env/dist/etc"
+      AC_WORLD_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_world"
+      AC_CHARACTER_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_characters"
+      AC_LOGIN_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_auth"
+      AC_PLAYERBOTS_DATABASE_INFO: "ac-database;3306;root;azeroth;acore_playerbots"
+
+      # ── Playerbot Core ────────────────────────────────────────────────────
+      AC_AIPLAYERBOT_ENABLED: "1"
+      # Bots log in automatically on server start
+      AC_AIPLAYERBOT_RANDOMBOTAUTOLOGIN: "1"
+      # How many random bots to keep alive in the world at all times
+      AC_AIPLAYERBOT_MAXRANDOMBOTS: "${PLAYERBOT_TOTAL_COUNT:-500}"
+      # Minimum bots (server will spawn more if count drops below this)
+      AC_AIPLAYERBOT_MINRANDOMBOTS: "${PLAYERBOT_MIN_COUNT:-100}"
+
+      # ── Faction Split ─────────────────────────────────────────────────────
+      # Ratio of Alliance bots (0–100; 50 = equal split)
+      AC_AIPLAYERBOT_ALLIANCERATIO: "${PLAYERBOT_ALLIANCE_RATIO:-50}"
+      # Ratio of Horde bots (0–100; 50 = equal split)
+      AC_AIPLAYERBOT_HORDERATIO: "${PLAYERBOT_HORDE_RATIO:-50}"
+
+      # ── Bot Behaviour ─────────────────────────────────────────────────────
+      # Log in all random bots at server startup (not just on demand)
+      AC_AIPLAYERBOT_LOGINATSTARTUP: "1"
+      # Max bot level (80 = WotLK cap)
+      AC_AIPLAYERBOT_RANDOMBOTMAXLEVEL: "80"
+
+      # ── Trading & Auction House ───────────────────────────────────────────
+      # 1 = bots trade with players and post/bid on the Auction House
+      # This is the real key — "AiPlayerbot.EnableRandomBotTrading" in playerbots.conf
+      AC_AIPLAYERBOT_ENABLERANDOMBOTTRADING: "1"
+      # Give bots starting gold so they can buy gear and post AH listings
+      AC_AIPLAYERBOT_STARTINGGOLD: "100"
+
+      # ── Eluna (optional Lua utility scripts) ─────────────────────────────
+      AC_ALE_ENABLED: "1"
+      # Mount point is outside the read-only client-data volume
+      AC_ELUNA_LUASCRIPTDIR: "/azerothcore/luascripts"
+
+    depends_on:
+      ac-database:
+        condition: service_healthy
+      ac-db-import:
+        condition: service_completed_successfully
+    volumes:
+      - client-data:/azerothcore/env/dist/data
+      - ./logs:/azerothcore/env/dist/logs
+      - ./eluna:/azerothcore/luascripts
+    ports:
+      - "8085:8085"
+      - "7878:7878"
+    restart: unless-stopped
+    networks:
+      - ac-network
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 4G
+
+volumes:
+  ac-database:
+    name: dads_mmo_playerbots_db
+  client-data:
+    name: dads_mmo_client_data
+
+networks:
+  ac-network:
+    name: dads_mmo_network
+    driver: bridge
